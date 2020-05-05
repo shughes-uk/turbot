@@ -95,9 +95,10 @@ no_hemisphere: Please enter your hemisphere choice first using the !pref hemisph
 not_a_command: Sorry, there is no command named "$request"
 not_admin: User is not a Turbot Admin
 oops: '**Deleting last logged price for $name.**'
-predict: '__**Predictive Graph for $name**__
+predict: '__**Turnip predictions for $name**__
 
-  Details: <$url>'
+  Details: <$url>
+  $summary'
 pref: Registered $pref preference for $name.
 pref_invalid_pref: Please provide a valid preference name, possible preferences include
   $prefs.

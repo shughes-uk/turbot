@@ -27,6 +27,8 @@ import pytz
 from dateutil.relativedelta import relativedelta
 from humanize import naturaltime
 from turnips.archipelago import Archipelago
+from turnips.meta import MetaModel
+from turnips.multi import RangeSet
 from turnips.plots import plot_models_range
 from yaml import load
 
@@ -95,14 +97,15 @@ USER_PREFRENCES = [
 ]
 
 DAYS = {
-    "sunday": 0,
     "monday": 1,
     "tuesday": 2,
     "wednesday": 3,
     "thursday": 4,
     "friday": 5,
     "saturday": 6,
+    "sunday": 7,
 }
+IDAYS = dict(map(reversed, DAYS.items()))
 
 
 class Validate:
@@ -418,6 +421,57 @@ class Turbot(discord.Client):
         timeline_data = {k: v for k, v in timeline_data.items() if v is not None}
         # TODO: Incorporate information about user's pattern from last week
         return {"initial_week": False, "timeline": timeline_data}
+
+    def _get_predictive_summary(self, target_user):
+        islands = {"islands": {}}
+        island_data = self._get_island_data(target_user)
+        if "Sunday_AM" not in island_data["timeline"]:
+            return ""
+        islands["islands"][target_user.name] = island_data
+        arch = Archipelago.load_json(json.dumps(islands))
+
+        ##################################################################################
+        # the following code is modified from the turnips/multi.py source code
+        lines = ["```"]
+        lines.append("{:13} {:23} {:23} {:>7}".format("Time", "Price", "Likely", "Odds"))
+        model = MetaModel(-1, arch.groups)
+        hist = model.histogram()
+        now = self.to_usertime(target_user, datetime.now(pytz.utc))
+        weekday = now.isoweekday()
+        current_time = f"{IDAYS[weekday].title()}{'_AM' if now.hour < 12 else '_PM'}"
+        skip = True
+        for time, pricecounts in hist.items():
+            if time == current_time:
+                skip = False
+                continue
+            if skip:
+                continue
+            # Gather possible prices
+            pset = RangeSet()
+            for price in pricecounts.keys():
+                pset.add(price)
+
+            # Determine likeliest price(s)
+            n_possibilities = sum(pricecounts.values())
+            likeliest = max(pricecounts.items(), key=lambda x: x[1])
+            likelies = list(filter(lambda x: x[1] >= likeliest[1], pricecounts.items()))
+
+            sample_size = len(likelies) * likeliest[1]
+            pct = 100 * (sample_size / n_possibilities)
+
+            rset = RangeSet()
+            for likely in likelies:
+                rset.add(likely[0])
+
+            time_col = time.replace("_", " ")
+            price_col = str(pset)
+            likely_col = str(rset)
+            chance_col = f"{pct:0.2f}%"
+            lines.append(f"{time_col:13} {price_col:23} {likely_col:23} {chance_col:>7}")
+        lines.append("```")
+        ##################################################################################
+
+        return "\n".join(lines)
 
     def _get_predictive_graph(self, target_user, graphname):
         """Builds a predictive graph of a user's price data."""
@@ -1328,10 +1382,20 @@ class Turbot(discord.Client):
         if not timeline[0]:
             return s("cant_find_buy", name=target_name), None
 
+        # graph
         self.generate_graph(channel, target_user, GRAPHCMD_FILE)
+
+        # summary
+        summary = self._get_predictive_summary(target_user)
+
+        # link
         query = ".".join((str(price) if price else "") for price in timeline).rstrip(".")
         url = f"{self.base_prophet_url}{query}"
-        return s("predict", name=target_name, url=url), discord.File(GRAPHCMD_FILE)
+
+        return (
+            s("predict", name=target_name, summary=summary, url=url),
+            discord.File(GRAPHCMD_FILE),
+        )
 
     @command
     def pref(self, channel, author, params):
